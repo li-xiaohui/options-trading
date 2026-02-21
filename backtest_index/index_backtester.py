@@ -52,6 +52,23 @@ def get_last_trading_day_of_year(df: pd.DataFrame, year: int) -> pd.Timestamp | 
     return sub.iloc[-1]["date"]
 
 
+def get_this_year_jan1_15_return() -> float | None:
+    """
+    Return this year's SPX price return between 1 Jan and 15 Jan.
+    (close on or before 15 Jan) / (close on or before 1 Jan) - 1.
+    Returns None if data is missing or insufficient.
+    """
+    df = load_spx()
+    year = pd.Timestamp.now().year
+    jan1 = pd.Timestamp(year=year, month=1, day=1)
+    jan15 = pd.Timestamp(year=year, month=1, day=15)
+    p_jan1 = get_price_on_or_before(df, jan1)
+    p_jan15 = get_price_on_or_before(df, jan15)
+    if p_jan1 is None or p_jan15 is None or p_jan1 <= 0 or p_jan15 <= 0:
+        return None
+    return (p_jan15 / p_jan1) - 1
+
+
 def run_backtest() -> pd.DataFrame:
     """
     For each year, compute:
@@ -133,3 +150,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    ret = get_this_year_jan1_15_return()
+    pct = f"{ret:.2%}" if ret is not None else "N/A"
+    print(f"This year's SPX price return between 1 Jan and 15 Jan: {pct}")
+
