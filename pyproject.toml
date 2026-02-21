@@ -1,0 +1,20 @@
+[project]
+name = "options-trading"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.4.2",
+    "pandas>=3.0.1",
+    "polygon-api-client>=1.16.3",
+    "python-dotenv>=1.2.1",
+    "scipy>=1.17.0",
+    "tqdm>=4.67.3",
+    "yfinance>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
