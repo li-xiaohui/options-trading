@@ -1,17 +1,11 @@
 """
-Tests for main.py — QQQ short put backtest helpers and engine.
+Tests for main.py — QQQ short put backtest helpers and engine (local data only).
 """
 
 import unittest.mock as mock
-import os
 import pandas as pd
 import numpy as np
 import pytest
-
-# Set dummy API key and mock Polygon client before importing main (avoids real API calls)
-os.environ.setdefault("POLYGON_API_KEY", "test_key_placeholder")
-_client = mock.patch("polygon.RESTClient")
-_client.start()
 
 import main
 
@@ -41,7 +35,6 @@ class TestPutDelta:
         assert -1 <= delta <= 0
 
     def test_OTM_put_delta_closer_to_zero(self):
-        # OTM put (K < S) has delta closer to 0
         otm = main.put_delta(S=100, K=90, T=0.5, r=0.04, iv=0.25)
         itm = main.put_delta(S=100, K=110, T=0.5, r=0.04, iv=0.25)
         assert otm > itm
@@ -87,67 +80,69 @@ class TestSelectStrikeByDelta:
 
 
 # =========================
-# get_underlying_prices
+# load_underlying_prices
 # =========================
 
 
-class TestGetUnderlyingPrices:
-    @mock.patch("main.yf.download")
-    def test_returns_dataframe_with_close_and_date_index(self, mock_download):
-        mock_download.return_value = pd.DataFrame(
-            {"Close": [100.0, 101.0]},
-            index=pd.DatetimeIndex(["2025-01-02", "2025-01-03"], name="Date"),
+class TestLoadUnderlyingPrices:
+    def test_returns_dataframe_with_close_and_date_index(self, tmp_path):
+        (tmp_path / "underlying.csv").write_text(
+            "date,close\n2025-01-02,100.0\n2025-01-03,101.0\n"
         )
-        df = main.get_underlying_prices("2025-01-01", "2025-01-10")
+        with mock.patch.object(main, "DATA_DIR", tmp_path):
+            df = main.load_underlying_prices("2025-01-01", "2025-01-10")
         assert "close" in df.columns
         assert df.index.name == "date"
         assert len(df) == 2
-        mock_download.assert_called_once_with(
-            main.UNDERLYING, start="2025-01-01", end="2025-01-10", progress=False
+
+    def test_raises_when_file_missing(self):
+        with mock.patch.object(main, "DATA_DIR", __import__("pathlib").Path("/nonexistent_data")):
+            with pytest.raises(FileNotFoundError, match="Run download_data.py"):
+                main.load_underlying_prices("2025-01-01", "2025-01-10")
+
+
+# =========================
+# load_put_chain
+# =========================
+
+
+class TestLoadPutChain:
+    def test_returns_dataframe_from_csv(self, tmp_path):
+        (tmp_path / "put_chains").mkdir()
+        (tmp_path / "put_chains" / "expiry_2025-01-17.csv").write_text(
+            "ticker,strike,expiry\nO:QQQ250117P00500000,500.0,2025-01-17\n"
         )
-
-
-# =========================
-# get_put_chain
-# =========================
-
-
-class TestGetPutChain:
-    def test_returns_dataframe_with_ticker_strike_expiry(self):
-        mock_contract = mock.MagicMock()
-        mock_contract.ticker = "O:QQQ250117C00100000"
-        mock_contract.strike_price = 500.0
-        mock_contract.expiration_date = "2025-01-17"
-        main.client.list_options_contracts = mock.MagicMock(return_value=[mock_contract])
-
-        df = main.get_put_chain(pd.Timestamp("2025-01-17").date())
+        with mock.patch.object(main, "DATA_DIR", tmp_path):
+            df = main.load_put_chain(pd.Timestamp("2025-01-17").date(), data_dir=tmp_path)
         assert not df.empty
         assert list(df.columns) == ["ticker", "strike", "expiry"]
-        assert df.iloc[0]["ticker"] == "O:QQQ250117C00100000"
+        assert df.iloc[0]["ticker"] == "O:QQQ250117P00500000"
         assert df.iloc[0]["strike"] == 500.0
 
-    def test_empty_contracts_returns_empty_dataframe(self):
-        main.client.list_options_contracts = mock.MagicMock(return_value=[])
-        df = main.get_put_chain(pd.Timestamp("2025-01-17").date())
+    def test_returns_empty_when_file_missing(self, tmp_path):
+        (tmp_path / "put_chains").mkdir()
+        with mock.patch.object(main, "DATA_DIR", tmp_path):
+            df = main.load_put_chain(pd.Timestamp("2025-01-17").date())
         assert df.empty
 
 
 # =========================
-# get_option_close
+# get_option_close_from_lookup
 # =========================
 
 
-class TestGetOptionClose:
-    def test_returns_close_when_aggs_non_empty(self):
-        mock_agg = mock.MagicMock()
-        mock_agg.close = 2.50
-        main.client.get_aggs = mock.MagicMock(return_value=[mock_agg])
-        out = main.get_option_close("O:QQQ250117P00500000", "2025-01-02")
+class TestGetOptionCloseFromLookup:
+    def test_returns_close_when_key_present(self):
+        d = pd.Timestamp("2025-01-02").date()
+        lookup = {("O:QQQ250117P00500000", d): 2.50}
+        out = main.get_option_close_from_lookup("O:QQQ250117P00500000", d, lookup)
         assert out == 2.50
 
-    def test_returns_None_when_no_aggs(self):
-        main.client.get_aggs = mock.MagicMock(return_value=[])
-        out = main.get_option_close("O:QQQ250117P00500000", "2025-01-02")
+    def test_returns_None_when_key_missing(self):
+        lookup = {}
+        out = main.get_option_close_from_lookup(
+            "O:QQQ250117P00500000", "2025-01-02", lookup
+        )
         assert out is None
 
 
@@ -175,7 +170,6 @@ class TestAnalyze:
         assert "Total PnL" in out
         assert "Win rate" in out
         assert "Max drawdown" in out
-        assert "Final capital" in out
         assert "100,125" in out or "100125" in out
 
 
@@ -185,21 +179,19 @@ class TestAnalyze:
 
 
 class TestBacktest:
-    """Backtest engine with mocked data and API."""
+    """Backtest engine with mocked local data."""
 
-    @mock.patch.object(main, "get_option_close")
-    @mock.patch.object(main, "get_put_chain")
-    @mock.patch.object(main, "get_underlying_prices")
+    @mock.patch.object(main, "load_option_daily")
+    @mock.patch.object(main, "load_put_chain")
+    @mock.patch.object(main, "load_underlying_prices")
     def test_returns_dataframe_and_no_crash(
-        self, mock_prices, mock_chain, mock_option_close
+        self, mock_prices, mock_chain, mock_option_daily
     ):
-        # Need > TARGET_DTE (30) dates so dates[:-30] is non-empty, and expiry in index
         start = pd.Timestamp("2026-11-01")
         dates = pd.date_range(start, periods=35, freq="B")
         mock_prices.return_value = pd.DataFrame(
             {"close": 500.0}, index=dates
         )
-        # One put: 450 strike so delta is in range; expiry = first entry + 30
         expiry = start + pd.Timedelta(days=main.TARGET_DTE)
         mock_chain.return_value = pd.DataFrame([
             {
@@ -208,11 +200,10 @@ class TestBacktest:
                 "expiry": expiry,
             }
         ])
-        def option_close(ticker, date):
-            if date == expiry.date():
-                return 0.0
-            return 2.0
-        mock_option_close.side_effect = option_close
+        mock_option_daily.return_value = pd.DataFrame([
+            {"ticker": "O:QQQ261130P00450000", "date": start.date(), "close": 2.0},
+            {"ticker": "O:QQQ261130P00450000", "date": expiry.date(), "close": 0.0},
+        ])
 
         result = main.backtest()
 

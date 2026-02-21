@@ -1,5 +1,5 @@
 """
-QQQ Short Put Backtest using Polygon.io
+QQQ Short Put Backtest (local data only).
 
 Strategy:
 - Sell cash-secured puts on QQQ
@@ -8,35 +8,23 @@ Strategy:
 - Hold to expiration
 - Daily resolution backtest
 
-Data:
-- Underlying prices: Polygon daily aggregates
-- Option prices: Polygon option aggregates
+Data: Load from local `data/` folder (no API calls).
+- Run download_data.py first to fetch option chain and prices from Polygon.
 - Greeks: Approximated via Black–Scholes
-
-IMPORTANT:
-- Polygon options data coverage varies by date
-- This is research-grade, not execution-grade
 """
 
-from polygon import RESTClient
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from scipy.stats import norm
 from datetime import timedelta
 from tqdm import tqdm
-import os
-import yfinance as yf
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # =========================
 # CONFIGURATION
 # =========================
 
-POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
-print(f"Using Polygon API Key: {POLYGON_API_KEY[:4]}...")
-
+DATA_DIR = Path("data")
 UNDERLYING = "QQQ"
 START_DATE = "2025-11-01"
 END_DATE = "2025-11-30"
@@ -48,12 +36,6 @@ RISK_FREE_RATE = 0.04
 DEFAULT_IV = 0.25
 
 INITIAL_CAPITAL = 100_000
-
-# =========================
-# POLYGON CLIENT
-# =========================
-
-client = RESTClient(POLYGON_API_KEY)
 
 # =========================
 # MATH HELPERS
@@ -75,47 +57,53 @@ def select_strike_by_delta(df, target_delta):
 
 
 # =========================
-# DATA FETCHING
+# LOCAL DATA LOADING
 # =========================
 
 
-def get_underlying_prices(start, end):
-    df = yf.download(UNDERLYING, start=start, end=end, progress=False)
-    df = df[["Close"]].rename(columns={"Close": "close"})
-    df.index.name = "date"
+def load_underlying_prices(start: str, end: str) -> pd.DataFrame:
+    """Load underlying daily prices from data/underlying.csv (no API)."""
+    path = DATA_DIR / "underlying.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing {path}. Run download_data.py first to fetch data."
+        )
+    df = pd.read_csv(path)
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+    df = df.set_index("date").sort_index()
+    df = df[["close"]]
+    # Filter to requested range
+    mask = (df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))
+    return df.loc[mask]
+
+
+def load_put_chain(expiry_date, data_dir: Path = DATA_DIR) -> pd.DataFrame:
+    """Load put chain for expiry from data/put_chains/expiry_YYYY-MM-DD.csv."""
+    if hasattr(expiry_date, "date"):
+        expiry_date = expiry_date.date()
+    date_str = pd.Timestamp(expiry_date).strftime("%Y-%m-%d")
+    path = data_dir / "put_chains" / f"expiry_{date_str}.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df["expiry"] = pd.to_datetime(df["expiry"])
     return df
 
 
-def get_put_chain(expiry_date):
-    contracts = client.list_options_contracts(
-        underlying_ticker=UNDERLYING,
-        contract_type="put",
-        expiration_date=expiry_date,
-        limit=1000,
-    )
-
-    rows = []
-    for c in contracts:
-        rows.append(
-            {
-                "ticker": c.ticker,
-                "strike": c.strike_price,
-                "expiry": pd.to_datetime(c.expiration_date),
-            }
-        )
-
-    return pd.DataFrame(rows)
+def load_option_daily(data_dir: Path = DATA_DIR) -> pd.DataFrame:
+    """Load option daily (ticker, date, close) from data/option_daily.csv."""
+    path = data_dir / "option_daily.csv"
+    if not path.exists():
+        return pd.DataFrame(columns=["ticker", "date", "close"])
+    df = pd.read_csv(path)
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    return df
 
 
-def get_option_close(option_ticker, date):
-    aggs = client.get_aggs(
-        ticker=option_ticker, multiplier=1, timespan="day", from_=date, to=date, limit=1
-    )
-
-    if len(aggs) == 0:
-        return None
-
-    return aggs[0].close
+def get_option_close_from_lookup(option_ticker, date, option_lookup: dict):
+    """Look up option close from preloaded option_lookup[(ticker, date)] -> close."""
+    key = (option_ticker, pd.Timestamp(date).date() if hasattr(date, "year") else date)
+    return option_lookup.get(key)
 
 
 # =========================
@@ -124,10 +112,18 @@ def get_option_close(option_ticker, date):
 
 
 def backtest():
-    prices = get_underlying_prices(START_DATE, END_DATE)
+    prices = load_underlying_prices(START_DATE, END_DATE)
+    if prices.empty:
+        return pd.DataFrame()
+
+    option_daily = load_option_daily()
+    option_lookup = {}
+    if not option_daily.empty:
+        for row in option_daily.itertuples(index=False):
+            option_lookup[(row.ticker, row.date)] = row.close
+
     capital = INITIAL_CAPITAL
     trades = []
-
     dates = prices.index
 
     for entry_date in tqdm(dates[:-TARGET_DTE]):
@@ -139,7 +135,7 @@ def backtest():
         spot = prices.loc[entry_date, "close"]
         T = TARGET_DTE / 365
 
-        chain = get_put_chain(expiry_date.date())
+        chain = load_put_chain(expiry_date)
         if chain.empty:
             continue
 
@@ -149,7 +145,9 @@ def backtest():
             strike = row["strike"]
             delta = put_delta(S=spot, K=strike, T=T, r=RISK_FREE_RATE, iv=DEFAULT_IV)
 
-            price = get_option_close(row["ticker"], entry_date.date())
+            price = get_option_close_from_lookup(
+                row["ticker"], entry_date.date(), option_lookup
+            )
             if price is None or price <= 0:
                 continue
 
@@ -177,11 +175,11 @@ def backtest():
         if capital < cash_required:
             continue
 
-        # Enter trade
         capital -= cash_required
 
-        exit_price = get_option_close(selected["ticker"], expiry_date.date())
-
+        exit_price = get_option_close_from_lookup(
+            selected["ticker"], expiry_date.date(), option_lookup
+        )
         if exit_price is None:
             exit_price = 0.0
 
@@ -237,6 +235,6 @@ if __name__ == "__main__":
     results = backtest()
     analyze(results)
 
-    # Save results
-    results.to_csv("qqq_short_put_results.csv", index=False)
-    print("\nTrade log saved to qqq_short_put_results.csv")
+    if not results.empty:
+        results.to_csv("qqq_short_put_results.csv", index=False)
+        print("\nTrade log saved to qqq_short_put_results.csv")
