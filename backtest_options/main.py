@@ -19,6 +19,7 @@ from pathlib import Path
 from scipy.stats import norm
 from datetime import timedelta
 from tqdm import tqdm
+from setup import START_DATE, END_DATE
 
 # =========================
 # CONFIGURATION
@@ -26,10 +27,7 @@ from tqdm import tqdm
 
 DATA_DIR = Path("data")
 UNDERLYING = "QQQ"
-START_DATE = "2025-11-01"
-END_DATE = "2025-11-30"
-
-TARGET_DTE = 30
+TARGET_DTE = 15
 TARGET_DELTA = -0.25
 
 RISK_FREE_RATE = 0.04
@@ -114,6 +112,7 @@ def get_option_close_from_lookup(option_ticker, date, option_lookup: dict):
 def backtest():
     prices = load_underlying_prices(START_DATE, END_DATE)
     if prices.empty:
+        print("After load_underlying_prices, No prices data found for the given date range.")
         return pd.DataFrame()
 
     option_daily = load_option_daily()

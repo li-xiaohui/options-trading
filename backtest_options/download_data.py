@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from polygon import RESTClient
 import pandas as pd
 from tqdm import tqdm
+from setup import START_DATE, END_DATE
 
 load_dotenv()
 
@@ -25,8 +26,6 @@ if not POLYGON_API_KEY:
     raise SystemExit("Set POLYGON_API_KEY in .env")
 
 UNDERLYING = "QQQ"
-START_DATE = "2026-01-09"
-END_DATE = "2026-02-20"
 TARGET_DTE = 30
 
 DATA_DIR = Path("data")
