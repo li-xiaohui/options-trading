@@ -8,13 +8,9 @@ import time
 import pandas as pd
 from pathlib import Path
 import yfinance as yf
+from setup import DATA_DIR, MAX_RETRIES
 
-
-DATA_DIR = Path(__file__).resolve().parent / "data"
 START_DATE = "1997-07-02"
-
-MAX_RETRIES = 3
-
 
 def _download_chunk(symbol: str, start: str, end: str) -> pd.DataFrame | None:
     """Download one chunk; returns None on failure."""
