@@ -1,5 +1,5 @@
 """
-KOSPI (^KS11) moving-average crossover backtest.
+Taiwan Weighted (^TWII) moving-average crossover backtest.
 
 - Fast MA: 5, 10, 20, 35, 50, 100 days
 - Slow MA: 10, 20, 35, 50, 100 days
@@ -12,18 +12,18 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
 from setup import DATA_DIR, RESULT_DIR, FAST_MA, SLOW_MA, TRADING_DAYS_PER_YEAR
 
-KS11_PATH = DATA_DIR / "ks11_daily.csv"
+TWII_PATH = DATA_DIR / "twii_daily.csv"
 
-
-def load_ks11() -> pd.DataFrame:
-    """Load KS11 daily (date, close)."""
-    if not KS11_PATH.exists():
+def load_twii() -> pd.DataFrame:
+    """Load TWII daily (date, close)."""
+    if not TWII_PATH.exists():
         raise FileNotFoundError(
-            f"Missing {KS11_PATH}. Run: python -m backtest_index.download_ks11"
+            f"Missing {TWII_PATH}. Run: python -m backtest_index.download_twii"
         )
-    df = pd.read_csv(KS11_PATH)
+    df = pd.read_csv(TWII_PATH)
     df["date"] = pd.to_datetime(df["date"])
     return df[["date", "close"]].sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
 
@@ -76,7 +76,7 @@ def run_ma_crossover_backtest() -> pd.DataFrame:
     - Collect daily returns on those days only
     - Compute annualized Sharpe of that return series
     """
-    df = load_ks11()
+    df = load_twii()
     df = add_mas(df)
     df["return_1d"] = df["close"].pct_change()
     df = df.dropna(subset=["return_1d"]).reset_index(drop=True)
@@ -110,8 +110,8 @@ def run_ma_crossover_backtest() -> pd.DataFrame:
 
 
 def buy_and_hold_sharpe() -> float | None:
-    """Annualized Sharpe for buy-and-hold over full KS11 history."""
-    df = load_ks11()
+    """Annualized Sharpe for buy-and-hold over full TWII history."""
+    df = load_twii()
     daily_ret = daily_returns(df)
     return annualized_sharpe(daily_ret)
 
@@ -121,7 +121,7 @@ def get_ma_trades(fast: int, slow: int) -> pd.DataFrame:
     For a (fast, slow) MA pair, return a DataFrame of trades: entry_date, exit_date,
     holding_days, return (from entry close to exit close).
     """
-    df = load_ks11()
+    df = load_twii()
     df = add_mas(df)
     fast_col = f"ma_{fast}"
     slow_col = f"ma_{slow}"
@@ -171,12 +171,12 @@ def plot_ma_trades_2020_2025(
     ax.axhline(0, color="gray", linewidth=0.8)
     ax.set_xlabel(f"Trade entry date (first date MA{fast} > MA{slow})")
     ax.set_ylabel("Return (%)")
-    ax.set_title(f"KOSPI MA{fast} vs MA{slow}: return per trade ({start.strftime('%Y-%m')} – {end.strftime('%Y-%m')})")
+    ax.set_title(f"TWII MA{fast} vs MA{slow}: return per trade ({start.strftime('%Y-%m')} – {end.strftime('%Y-%m')})")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=6))
     plt.xticks(rotation=25)
     plt.tight_layout()
-    
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULT_DIR / filename
     plt.savefig(out, dpi=150)
     plt.close()
@@ -197,9 +197,9 @@ def plot_holding_days_barchart(
     ax.bar(counts.index.astype(int), counts.values, color="steelblue", edgecolor="white", linewidth=0.5)
     ax.set_xlabel("Holding days")
     ax.set_ylabel("Number of trades")
-    ax.set_title(f"KOSPI MA{fast} vs MA{slow}: distribution of holding period (total {len(trades)} trades)")
+    ax.set_title(f"TWII MA{fast} vs MA{slow}: distribution of holding period (total {len(trades)} trades)")
     plt.tight_layout()
-    
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULT_DIR / filename
     plt.savefig(out, dpi=150)
     plt.close()
@@ -207,7 +207,7 @@ def plot_holding_days_barchart(
 
 
 def main() -> None:
-    print("\n===== KOSPI (KS11) MA Crossover Backtest =====\n")
+    print("\n===== Taiwan Weighted (TWII) MA Crossover Backtest =====\n")
 
     # Buy and hold
     bh_sharpe = buy_and_hold_sharpe()
@@ -230,17 +230,17 @@ def main() -> None:
         print(f"{r['fast_ma']:>6} {r['slow_ma']:>6} {sharpe_str:>10} {r['n_trades']:>8} {r['min_holding_days']:>8} {r['max_holding_days']:>8}")
 
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    out = RESULT_DIR / "ks11_ma_backtest_results.csv"
+    out = RESULT_DIR / "twii_ma_backtest_results.csv"
     results.to_csv(out, index=False)
     print(f"\nResults saved to {out}")
 
     # Bar plots: MA5 vs MA10 and MA5 vs MA35 trades, 2020–2025
-    plot_ma_trades_2020_2025(5, 10, "ks11_ma5_ma10_trades_2020_2025.png")
-    plot_ma_trades_2020_2025(5, 35, "ks11_ma5_ma35_trades_2020_2025.png")
+    plot_ma_trades_2020_2025(5, 10, "twii_ma5_ma10_trades_2020_2025.png")
+    plot_ma_trades_2020_2025(5, 35, "twii_ma5_ma35_trades_2020_2025.png")
 
     # Holding-days distribution
-    plot_holding_days_barchart(5, 10, "ks11_ma5_ma10_holding_days.png")
-    plot_holding_days_barchart(5, 35, "ks11_ma5_ma35_holding_days.png")
+    plot_holding_days_barchart(5, 10, "twii_ma5_ma10_holding_days.png")
+    plot_holding_days_barchart(5, 35, "twii_ma5_ma35_holding_days.png")
 
 
 if __name__ == "__main__":
